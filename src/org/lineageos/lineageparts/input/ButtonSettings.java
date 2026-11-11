@@ -6,7 +6,9 @@
 
 package org.lineageos.lineageparts.input;
 
+import static android.view.WindowManagerPolicyConstants.NAV_BAR_MODE_2BUTTON_OVERLAY;
 import static android.view.WindowManagerPolicyConstants.NAV_BAR_MODE_3BUTTON_OVERLAY;
+import static android.view.WindowManagerPolicyConstants.NAV_BAR_MODE_GESTURAL_OVERLAY;
 
 import static com.android.systemui.shared.recents.utilities.Utilities.isLargeScreen;
 
@@ -80,6 +82,7 @@ public class ButtonSettings extends SettingsPreferenceFragment
     private static final String KEY_VOLUME_WAKE_SCREEN = "volume_wake_screen";
     private static final String KEY_VOLUME_ANSWER_CALL = "volume_answer_call";
     private static final String KEY_DISABLE_NAV_KEYS = "disable_nav_keys";
+    private static final String PREF_NAVIGATION_MODE_WITH_NAVBAR = "navigation_mode_with_navbar";
     private static final String KEY_NAVIGATION_BACK_LONG_PRESS = "navigation_back_long_press";
     private static final String KEY_NAVIGATION_HOME_LONG_PRESS = "navigation_home_long_press";
     private static final String KEY_NAVIGATION_HOME_DOUBLE_TAP = "navigation_home_double_tap";
@@ -653,6 +656,27 @@ public class ButtonSettings extends SettingsPreferenceFragment
         return false;
     }
 
+    private boolean isOnScreenNavbarEnabled() {
+        return LineageSettings.System.getIntForUser(requireActivity().getContentResolver(),
+                LineageSettings.System.FORCE_SHOW_NAVBAR, 0, UserHandle.USER_CURRENT) != 0;
+    }
+
+    private int getCurrentNavigationMode() {
+        return Settings.Secure.getIntForUser(requireActivity().getContentResolver(),
+                "navigation_mode", 0, UserHandle.USER_CURRENT);
+    }
+
+    private static String navigationModeOverlay(int mode) {
+        switch (mode) {
+            case 1:
+                return NAV_BAR_MODE_2BUTTON_OVERLAY;
+            case 2:
+                return NAV_BAR_MODE_GESTURAL_OVERLAY;
+            default:
+                return NAV_BAR_MODE_3BUTTON_OVERLAY;
+        }
+    }
+
     private static void setButtonNavigationMode(String overlayPackage) {
         IOverlayManager overlayManager = IOverlayManager.Stub.asInterface(
                 ServiceManager.getService(Context.OVERLAY_SERVICE));
@@ -820,15 +844,34 @@ public class ButtonSettings extends SettingsPreferenceFragment
                     mVolumePanelOnLeft.isChecked() ? 1 : 0, UserHandle.USER_CURRENT);
             return true;
         } else if (preference == mDisableNavigationKeys) {
+            final boolean navbarEnabled = !isOnScreenNavbarEnabled();
             mDisableNavigationKeys.setEnabled(false);
             mNavigationPreferencesCat.setEnabled(false);
-            if (!mDisableNavigationKeys.isChecked()) {
-                setButtonNavigationMode(NAV_BAR_MODE_3BUTTON_OVERLAY);
+            final SharedPreferences prefs =
+                    PreferenceManager.getDefaultSharedPreferences(requireActivity());
+            final String navigationOverlay;
+            if (navbarEnabled) {
+                // Restore the style selected while on-screen navigation was last enabled.
+                navigationOverlay = navigationModeOverlay(
+                        prefs.getInt(PREF_NAVIGATION_MODE_WITH_NAVBAR, 0));
+            } else {
+                // The mode selector is hidden while the bar is off. Save the user's
+                // on-screen choice before returning to hardware navigation.
+                prefs.edit().putInt(PREF_NAVIGATION_MODE_WITH_NAVBAR,
+                        getCurrentNavigationMode()).apply();
+                navigationOverlay = NAV_BAR_MODE_3BUTTON_OVERLAY;
             }
-            writeDisableNavkeysOption(mDisableNavigationKeys.isChecked());
+            // Trebuchet restarts when FORCE_SHOW_NAVBAR changes. Finish selecting the
+            // overlay first so the new process starts with the requested navigation style.
+            setButtonNavigationMode(navigationOverlay);
+            writeDisableNavkeysOption(navbarEnabled);
             updateDisableNavkeysOption();
             updateDisableNavkeysCategories(true, false);
             mHandler.postDelayed(() -> {
+                // A configuration change or leaving this page may detach the fragment.
+                if (!isAdded()) {
+                    return;
+                }
                 mDisableNavigationKeys.setEnabled(true);
                 mNavigationPreferencesCat.setEnabled(mDisableNavigationKeys.isChecked());
                 updateDisableNavkeysCategories(mDisableNavigationKeys.isChecked(), false);
